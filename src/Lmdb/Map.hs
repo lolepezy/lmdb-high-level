@@ -44,6 +44,7 @@ module Lmdb.Map
   , lastsert
   , repsert
   , delete
+  , delete'
     -- * Cursorless Operations
     -- ** Reading
   , lookup'
@@ -333,4 +334,5 @@ lastsert cur k v = do
 delete :: Cursor 'ReadWrite k v -> IO ()
 delete (Cursor cur _) = mdb_cursor_del_X noWriteFlags cur
 
-
+delete' :: Transaction 'ReadWrite -> Database k v -> k -> IO ()
+delete' = deleteInternal

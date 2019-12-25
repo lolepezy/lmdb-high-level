@@ -19,7 +19,7 @@ import Foreign.C.Types (CSize(..))
 import Foreign.Ptr (Ptr,plusPtr)
 import Foreign.Marshal.Alloc (allocaBytes,alloca)
 import Control.Monad
-import Control.Exception (finally, bracketOnError)
+import Control.Exception (finally, bracketOnError, bracket)
 
 -- | Alternative to 'withKVPtrs' that allows us to not initialize the key or the
 --   value.
@@ -229,9 +229,43 @@ decodeResults settings success keyPtr valPtr = if success
   else return Nothing
 {-# INLINE decodeResults #-}
 
+decodeResultsMulti :: MultiDatabaseSettings k v -> Bool -> Ptr MDB_val -> Ptr MDB_val -> IO (Maybe (KeyValue k v))
+decodeResultsMulti settings success keyPtr valPtr = if success
+  then do
+    MDB_val keySize keyWordPtr <- peek keyPtr
+    MDB_val valSize valWordPtr <- peek valPtr
+    key <- getDecoding (multiDatabaseSettingsDecodeKey settings) keySize keyWordPtr
+    val <- getDecoding (multiDatabaseSettingsDecodeValue settings) valSize valWordPtr
+    return (Just (KeyValue key val))
+  else return Nothing
+{-# INLINE decodeResultsMulti #-}
+
+
 getWithoutKey :: MDB_cursor_op -> Cursor e k v -> IO (Maybe (KeyValue k v))
 getWithoutKey op (Cursor cur settings) = do
   withKVPtrsNoInit $ \(keyPtr :: Ptr MDB_val) (valPtr :: Ptr MDB_val) -> do
     success <- mdb_cursor_get_X op cur keyPtr valPtr
     decodeResults settings success keyPtr valPtr
+    
+getWithoutKeyMulti :: MDB_cursor_op -> MultiCursor e k v -> IO (Maybe (KeyValue k v))
+getWithoutKeyMulti op (MultiCursor cur settings) = do
+  withKVPtrsNoInit $ \(keyPtr :: Ptr MDB_val) (valPtr :: Ptr MDB_val) -> do
+    success <- mdb_cursor_get_X op cur keyPtr valPtr
+    decodeResultsMulti settings success keyPtr valPtr
+    
+
+
+deleteInternal :: Transaction 'ReadWrite -> Database k v -> k -> IO ()
+deleteInternal (Transaction txn) (Database dbi settings) k = do
+  let SizedPoke keySize keyPoke = case settings of
+        DatabaseSettings _ keyEncoding _ _ _ -> runEncoding keyEncoding k
+  bracket
+    (mdb_cursor_open_X txn dbi)
+     mdb_cursor_close_X
+    (\cur -> 
+      allocaBytes (fromIntegral keySize) $ \(keyDataPtr :: Ptr Word8) -> do
+        keyPoke keyDataPtr
+        withKVPtrsInitKey (MDB_val keySize keyDataPtr) $ \keyPtr valPtr -> do
+          success <- mdb_cursor_get_X MDB_SET_KEY cur keyPtr valPtr
+          mdb_cursor_del_X noWriteFlags cur)
 

@@ -119,6 +119,32 @@ putGetLawSeparate k v = monadicIO $ do
         Map.lookup' (readonly txn) db k
       return (m == Just v)
 
+putGetDeleteLaw :: Word -> Word -> Property
+putGetDeleteLaw k v = monadicIO $ do
+  (assert =<<) $ run $ do
+    withOneDb testDbiSettings $ \env db -> do
+      withTransaction env $ \txn -> do
+        Map.insert' txn db k v
+        m <- Map.lookup' (readonly txn) db k
+        Map.delete' txn db k
+        m' <- Map.lookup' (readonly txn) db k
+        return (m == Just v && m' == Nothing)
+
+putGetDeleteLawSeparate :: Word -> Word -> Property
+putGetDeleteLawSeparate k v = monadicIO $ do
+  (assert =<<) $ run $ do
+    withOneDb testDbiSettings $ \env db -> do
+      withTransaction env $ \txn ->
+        Map.insert' txn db k v
+      m <- withTransaction env $ \txn ->
+        Map.lookup' (readonly txn) db k
+      withTransaction env $ \txn -> 
+        Map.delete' txn db k
+      m' <- withTransaction env $ \txn ->
+        Map.lookup' (readonly txn) db k
+      return (m == Just v && m' == Nothing)    
+        
+
 wordOrdering :: [Word] -> Property
 wordOrdering ks = monadicIO $ do
   (assert =<<) $ run $ do
