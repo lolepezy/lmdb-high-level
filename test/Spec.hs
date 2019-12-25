@@ -51,18 +51,23 @@ tests :: [Test]
 tests =
   [ testProperty "Put Get Law (single transaction)" putGetLaw
   , testProperty "Put Get Law (separate transactions)" putGetLawSeparate
+  , testProperty "Put Get Delete Law (single transaction)" putGetDeleteLaw
+  , testProperty "Put Get Delete Law (separate transactions)" putGetDeleteLawSeparate
   , testProperty "Text Codec" (propCodecIso Codec.text)
   , testProperty "ByteString Codec" (propCodecIso Codec.byteString)
   , testProperty "Put Get Law (Text)" textCodecTest
   , testProperty "Native Word Ordering" wordOrdering
   , testProperty "Custom Color Ordering" customColorOrdering
-  , testProperty "Multimap Streaming Values at Key" multimapStreamingValues
+  , testProperty "Multimap Streaming All Values Forward" multimapStreamingValuesForward
+  , testProperty "Multimap Streaming All Values Backward" multimapStreamingValuesBackward
+  , testProperty "Multimap Streaming Values at Key" multimapStreamingValuesAtKey
   ]
 
 testDbiSettings :: DatabaseSettings Word Word
 testDbiSettings = makeSettings
   (SortNative NativeSortInteger) Codec.word Codec.word
 
+  
 textualDbiSettings :: DatabaseSettings Text Text
 textualDbiSettings = makeSettings
   (SortNative NativeSortLexographic) Codec.text Codec.text
@@ -167,8 +172,8 @@ customColorOrdering ks = monadicIO $ do
           xs <- Pipes.toListM (Map.firstForward cur)
           return (map keyValueKey xs == ksNoDups)
 
-multimapStreamingValues :: [(Word,Color)] -> Property
-multimapStreamingValues xs = monadicIO $ do
+multimapStreamingValuesAtKey :: [(Word,Color)] -> Property
+multimapStreamingValuesAtKey xs = monadicIO $ do
   (assert =<<) $ run $ do
     withOneMultiDb multiColorSettings $ \env db -> do
       withTransaction env $ \txn -> do
@@ -180,6 +185,26 @@ multimapStreamingValues xs = monadicIO $ do
             vals <- Pipes.toListM $ Multimap.lookupValues cur k
             return $ All $ vals == expVals
           return correct
+
+multimapStreamingValuesForward :: [(Word,Color)] -> Property
+multimapStreamingValuesForward = multimapStreamingValues Multimap.firstForward
+
+multimapStreamingValuesBackward :: [(Word,Color)] -> Property
+multimapStreamingValuesBackward = multimapStreamingValues Multimap.lastBackward
+
+multimapStreamingValues :: (MultiCursor 'ReadWrite Word Color -> Producer (KeyValue Word Color) IO ()) -> 
+                          [(Word,Color)] ->                           
+                          Property
+multimapStreamingValues cursorStart xs = monadicIO $ do
+  (assert =<<) $ run $ do
+    withOneMultiDb multiColorSettings $ \env db -> do
+      withTransaction env $ \txn ->        
+        withMultiCursor txn db $ \cur -> do
+          forM_ xs $ \(k,v) -> Multimap.insert cur k v        
+          keyVals <- Pipes.toListM $ cursorStart cur          
+          let produced = Set.fromList $ map (\(KeyValue k v) -> (k, v)) keyVals
+          let expected = Set.fromList xs
+          return $ produced == expected
 
 textCodecTest :: Text -> Text -> Property
 textCodecTest k v = monadicIO $ do

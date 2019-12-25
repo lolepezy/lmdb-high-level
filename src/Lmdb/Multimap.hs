@@ -13,6 +13,9 @@ module Lmdb.Multimap
   , delete
   , deleteValues
   , first
+  , last
+  , firstForward
+  , lastBackward
   ) where
 
 import Prelude hiding (last,lookup)
@@ -30,27 +33,51 @@ import Foreign.Marshal.Alloc (allocaBytes,alloca)
 import Foreign.C.Types (CSize(..))
 import Control.Monad
 
--- Producer' (k,Producer' v IO ()) IO ()
-firstForward :: MultiCursor e k v -> FreeT (KeyValues k (Producer v IO)) IO ()
-firstForward cur = FreeT $ fmap go (first cur)
-  where
-  go m = case m of
-    Nothing -> Pure ()
-    Just (KeyValue k v) -> do
-      Free $ KeyValues k $ do
-        forwardValues cur
-        return $ FreeT $ fmap go (nextKey cur)
-  -- go = FreeT $ do
-  --   m <- nextKey
-  --   case m of
-  --     Nothing -> Pure ()
-  --     Just (KeyValue k v) -> do
-  --       Free $ KeyValue k $ do
-  --         forwardValues
-  --         go
+-- -- Producer' (k,Producer' v IO ()) IO ()
+-- firstForward :: MultiCursor e k v -> FreeT (KeyValues k (Producer v IO)) IO ()
+-- firstForward cur = FreeT $ fmap go (first cur)
+--   where
+--   go m = case m of
+--     Nothing -> Pure ()
+--     Just (KeyValue k v) -> do
+--       Free $ KeyValues k $ do
+--         forwardValues cur
+--         return $ FreeT $ fmap go (nextKey cur)
+--   -- go = FreeT $ do
+--   --   m <- nextKey
+--   --   case m of
+--   --     Nothing -> Pure ()
+--   --     Just (KeyValue k v) -> do
+--   --       Free $ KeyValue k $ do
+--   --         forwardValues
+--   --         go
 
 first :: MultiCursor e k v -> IO (Maybe (KeyValue k v))
 first mc = getWithoutKey MDB_FIRST (downgradeCursor mc)
+
+last :: MultiCursor e k v -> IO (Maybe (KeyValue k v))
+last = getWithoutKeyMulti MDB_LAST
+
+next :: MultiCursor e k v -> IO (Maybe (KeyValue k v))
+next = getWithoutKeyMulti MDB_NEXT
+
+forward :: MultiCursor e k v -> Producer' (KeyValue k v) IO ()
+forward = repeatedly next
+
+backward :: MultiCursor e k v -> Producer' (KeyValue k v) IO ()
+backward = repeatedly prev
+
+firstForward :: MultiCursor e k v -> Producer' (KeyValue k v) IO ()
+firstForward = yieldMaybeThen first forward
+
+lastBackward :: MultiCursor e k v -> Producer' (KeyValue k v) IO ()
+lastBackward = yieldMaybeThen last backward
+
+-- lookupForward :: MultiCursor e k v -> k -> Producer' (KeyValue k v) IO ()
+-- lookupForward cursor k = yieldMaybeThen (flip lookup k) forward cursor
+
+-- lookupGteForward :: MultiCursor e k v -> k -> Producer' (KeyValue k v) IO ()
+-- lookupGteForward cursor k = yieldMaybeThen (flip lookupGte k) forward cursor
 
 -- | The next key and its first value.
 nextKey :: MultiCursor e k v -> IO (Maybe (KeyValue k v))
@@ -68,6 +95,10 @@ nextValue = error "write me"
 
 lookupFirstValue :: MultiCursor e k v -> k -> IO (Maybe v)
 lookupFirstValue mc k = getValueWithKey MDB_SET_KEY (downgradeCursor mc) k
+
+prev :: MultiCursor e k v -> IO (Maybe (KeyValue k v))
+prev = getWithoutKeyMulti MDB_PREV
+
 
 -- | Lookup all values at the given key. These values are provided
 --   as a 'Producer' since there can be many pages of values. Since
@@ -166,4 +197,30 @@ hoistFreeT mh = FreeT . mh . liftM (fmap (hoistFreeT mh)) . runFreeT
 --       Just v -> yield v >> go
 
 
+getKeyWithoutKey :: MDB_cursor_op -> MultiCursor e k v -> IO (Maybe k)
+getKeyWithoutKey op (MultiCursor cur settings) = do
+  withKVPtrsNoInit $ \(keyPtr :: Ptr MDB_val) (valPtr :: Ptr MDB_val) -> do
+    success <- mdb_cursor_get_X op cur keyPtr valPtr
+    decodeOne (getDecoding $ multiDatabaseSettingsDecodeKey settings) success keyPtr
 
+
+yieldMaybeThen ::
+     (MultiCursor e k v -> IO (Maybe (KeyValue k v)))
+  -> (MultiCursor e k v -> Producer' (KeyValue k v) IO ())
+  -> MultiCursor e k v
+  -> Producer' (KeyValue k v) IO ()
+yieldMaybeThen f p cursor = do
+  m <- lift (f cursor)
+  case m of
+    Nothing -> return ()
+    Just kv -> yield kv >> p cursor
+
+
+repeatedly :: forall e k v. (MultiCursor e k v -> IO (Maybe (KeyValue k v))) -> 
+              MultiCursor e k v -> 
+              Producer' (KeyValue k v) IO ()
+repeatedly f = go
+  where
+  go :: MultiCursor e k v -> Producer' (KeyValue k v) IO ()
+  go = yieldMaybeThen f go
+    
