@@ -22,29 +22,29 @@ import Foreign.C.Types (CSize(..))
 import Foreign.Ptr (Ptr,plusPtr)
 import Foreign.Marshal.Alloc (allocaBytes,alloca)
 import Control.Monad
-import Control.Exception (finally, bracketOnError)
+import Control.Exception (finally, bracketOnError, bracket)
 
 withCursor ::
      Transaction e
   -> Database k v
   -> (Cursor e k v -> IO a)
   -> IO a
-withCursor (Transaction txn) (Database dbi settings) f = do
-  cur <- mdb_cursor_open_X txn dbi
-  a <- f (Cursor cur settings)
-  mdb_cursor_close_X cur
-  return a
+withCursor (Transaction txn) (Database dbi settings) f = 
+  bracket 
+    (mdb_cursor_open_X txn dbi)
+    mdb_cursor_close_X
+    $ \cur -> f (Cursor cur settings)
 
 withMultiCursor ::
      Transaction e
   -> MultiDatabase k v
   -> (MultiCursor e k v -> IO a)
   -> IO a
-withMultiCursor (Transaction txn) (MultiDatabase dbi settings) f = do
-  cur <- mdb_cursor_open_X txn dbi
-  a <- f (MultiCursor cur settings)
-  mdb_cursor_close_X cur
-  return a
+withMultiCursor (Transaction txn) (MultiDatabase dbi settings) f = 
+  bracket 
+    (mdb_cursor_open_X txn dbi)
+    mdb_cursor_close_X
+    $ \cur -> f (MultiCursor cur settings)  
 
 withAbortableTransaction ::
      ModeBool e
@@ -77,6 +77,17 @@ withTransaction e@(Environment env) f = do
       a <- f (Transaction txn)
       mdb_txn_commit txn
       return a
+
+withROTransaction1 :: ModeBool e
+   => Environment e
+   -> (Transaction ReadOnly -> IO a)
+   -> IO a
+withROTransaction1 e@(Environment env) f =
+   bool runInBoundThread id True $ bracketOnError
+     (mdb_txn_begin env Nothing True)
+     mdb_txn_abort
+     $ \txn -> f (Transaction txn)
+
 
 withNestedTransaction ::
      Environment 'ReadWrite
@@ -273,37 +284,5 @@ readonly = coerce
 readonlyEnvironment :: Environment 'ReadWrite -> Environment 'ReadOnly
 readonlyEnvironment = coerce
 
--- csvsToLmdb ::
---      FilePath -- ^ Geolite IPv4 Blocks
---   -> FilePath -- ^ Geolite City Locations
---   -> FilePath -- ^ Directory for LMDB
---   -> IO ()
--- csvsToLmdb geoBlocksPath geoCitiesPath lmdbDir = do
---   env <- mdb_env_create
---   mdb_env_set_mapsize env (2 ^ 31)
---   mdb_env_set_maxreaders env 1
---   mdb_env_set_maxdbs env 2
---   mdb_env_open env lmdbDir []
---   txn <- mdb_txn_begin env Nothing True
---   dbiBlocks <- mdb_dbi_open' txn (Just "blocks") [MDB_INTEGERKEY,MDB_CREATE]
---   let appendFlag = compileWriteFlags [MDB_APPEND]
---   r <- withFile filename ReadMode $ \h -> runEffect $
---         fmap (SD.convertDecodeError "utf-8") (PT.decode (PT.utf8 . PT.eof) $ PB.fromHandle h)
---     >-> fmap Just blocks
---     >-> Pipes.mapM_ (\block -> do
---           alloca $ \(w64Ptr :: Ptr Word64) -> do
---             poke w64Ptr (fromIntegral w32)
---             let IPv4Range (IPv4 w32) _ = blockNetwork block
---                 w8Ptr = (castPtr :: Ptr Word64 -> Ptr Word8) w64Ptr
---             mdb_put' appendFlag txn dbiBlocks
---               (MDB_val (CSize 8) w8Ptr)
---               (MDB_val (CSize 8) w8Ptr)
---         )
---   case r of
---     Nothing -> assertBool "impossible" True
---     Just err -> assertFailure (Decoding.prettyError Text.unpack err)
-
--- putBlock :: Block -> Put
--- putBlock (Block network geonameId registered represented isAnon isSat postal lat lon accuracy)
 
 
