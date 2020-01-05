@@ -8,10 +8,12 @@
 module Lmdb.Multimap
   (
     lookupValues
+  , lookupFirstValue  
   , insert
   , dupsert
   , delete
   , deleteValues
+  , deleteKV
   , first
   , last
   , firstForward
@@ -82,7 +84,7 @@ lastBackward = yieldMaybeThen last backward
 -- | The next key and its first value.
 nextKey :: MultiCursor e k v -> IO (Maybe (KeyValue k v))
 nextKey = error "write me"
-
+  
 -- | The previous key and its last value.
 prevKey :: MultiCursor e k v -> IO (Maybe (KeyValue k v))
 prevKey = error "write me"
@@ -142,6 +144,7 @@ forwardValuesStandard (MultiCursor cur dbs) = go where
     case m of
       Nothing -> return ()
       Just v -> yield v >> go
+          
 
 -- | Insert a key-value pair. If the value already exists at the key, do not add
 --   another copy of it. This treats the existing values corresponding
@@ -166,6 +169,10 @@ delete (MultiCursor cur _) = mdb_cursor_del_X noWriteFlags cur
 -- | Deletes all the values at the key the cursor is positioned at.
 deleteValues :: MultiCursor 'ReadWrite k v -> IO ()
 deleteValues (MultiCursor cur _) = mdb_cursor_del_X noDupDataFlags cur
+
+-- | Deletes specific pair of key and value
+deleteKV :: Transaction 'ReadWrite -> MultiDatabase k v -> k -> v -> IO ()
+deleteKV = deleteMultiInternal
 
 -- | Starts at the first element, iterating over all the key-value pairs
 --   in order and deleting the ones for which the client requests 'False'.

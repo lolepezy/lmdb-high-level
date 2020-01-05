@@ -90,6 +90,12 @@ mdb_cursor_close_X x = case x of
   CursorSafe cur -> mdb_cursor_close cur
   CursorUnsafe cur -> mdb_cursor_close' cur
 
+mdb_cmp_X :: MDB_txn -> DbiByFfi -> MDB_val -> MDB_val -> IO Ordering
+mdb_cmp_X txn x k1 k2 = case x of
+  DbiSafe dbi -> mdb_dcmp txn dbi k1 k2
+  DbiUnsafe dbi -> mdb_dcmp' txn dbi k1 k2
+  
+
 -- | This one is a little different. The first argument is a 'Bool'
 --   that is 'True' if we want we use safe FFI calls and 'False'
 --   if we want unsafe FFI calls.
@@ -152,6 +158,7 @@ lookupInternal (Transaction txn) (Database dbi settings) k = do
       case m of
         Nothing -> return Nothing
         Just (MDB_val valSize valPtr) -> fmap Just $ decodeValue valSize valPtr
+
 
 insertInternal :: MDB_WriteFlags -> Transaction 'ReadWrite -> Database k v -> k -> v -> IO Bool
 insertInternal flags txn db k v =
@@ -267,5 +274,45 @@ deleteInternal (Transaction txn) (Database dbi settings) k = do
         keyPoke keyDataPtr
         withKVPtrsInitKey (MDB_val keySize keyDataPtr) $ \keyPtr valPtr -> do
           success <- mdb_cursor_get_X MDB_SET_KEY cur keyPtr valPtr
-          mdb_cursor_del_X noWriteFlags cur)
+          if success 
+            then mdb_cursor_del_X noWriteFlags cur
+            else return ())
+
+deleteMultiInternal :: Transaction 'ReadWrite -> MultiDatabase k v -> k -> v -> IO ()
+deleteMultiInternal (Transaction txn) (MultiDatabase dbi settings) k v =
+  bracket
+    (mdb_cursor_open_X txn dbi)
+     mdb_cursor_close_X
+    (\cur -> findAndDelete cur)
+    where
+      (SizedPoke keyCSize keyPoke, SizedPoke valCSize valPoke) = case settings of
+        MultiDatabaseSettings _ _ keyEncoding _ valEncoding _ -> 
+          (runEncoding keyEncoding k, runEncoding valEncoding v)
+
+      findAndDelete cur = do 
+        allocaBytes (fromIntegral valCSize) $ \valueToFindPtr -> do
+          valPoke valueToFindPtr
+          let valueToFind = MDB_val valCSize valueToFindPtr
+
+          cmp <- allocaBytes (fromIntegral keyCSize) $ \keyDataPtr -> do
+            keyPoke keyDataPtr
+            withKVPtrsInitKey (MDB_val keyCSize keyDataPtr) $ \keyPtr valPtr -> do
+              success <- mdb_cursor_get_X MDB_SET_KEY cur keyPtr valPtr                        
+              compare valueToFind success valPtr              
+
+          deleteOrContinue valueToFind cmp        
+          where
+            deleteOrContinue valueToFind cmp = 
+              case cmp of
+                Nothing -> pure ()
+                Just EQ -> mdb_cursor_del_X noWriteFlags cur >> moveToNext
+                Just _  -> moveToNext
+                where
+                  moveToNext = do 
+                    cmp' <- withKVPtrsNoInit $ \keyPtr valPtr -> do
+                      success <- mdb_cursor_get_X MDB_NEXT_DUP cur keyPtr valPtr        
+                      compare valueToFind success valPtr
+                    deleteOrContinue valueToFind cmp'
+
+      compare valueToFind = decodeOne $ \size ptr -> mdb_cmp_X txn dbi (MDB_val size ptr) valueToFind          
 

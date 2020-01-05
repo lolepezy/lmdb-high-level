@@ -53,6 +53,10 @@ tests =
   , testProperty "Put Get Law (separate transactions)" putGetLawSeparate
   , testProperty "Put Get Delete Law (single transaction)" putGetDeleteLaw
   , testProperty "Put Get Delete Law (separate transactions)" putGetDeleteLawSeparate
+  , testProperty "Put Get Delete Law Multimap (single transaction)" putGetDeleteMultiLaw
+  , testProperty "Put Get Delete Law Multimap (separate transactions)" putGetDeleteMultiLawSeparate  
+  , testProperty "Put Get Delete Law Multimap Many Values (single transaction)" putGetDeleteMultiManyValuesLaw
+  , testProperty "Put Get Delete Law Multimap Many Values (separate transactions)" putGetDeleteMultiManyValuesLawSeparate
   , testProperty "Text Codec" (propCodecIso Codec.text)
   , testProperty "ByteString Codec" (propCodecIso Codec.byteString)
   , testProperty "Put Get Law (Text)" textCodecTest
@@ -148,6 +152,107 @@ putGetDeleteLawSeparate k v = monadicIO $ do
       m' <- withTransaction env $ \txn ->
         Map.lookup' (readonly txn) db k
       return (m == Just v && m' == Nothing)    
+
+putGetDeleteMultiLaw :: Word -> Color -> Color -> Color -> Property
+putGetDeleteMultiLaw k v1 v2 v3 = monadicIO $ do
+  (assert =<<) $ run $ 
+    withOneMultiDb multiColorSettings $ \env db -> do
+      withTransaction env $ \txn -> do
+        withMultiCursor txn db $ \cur -> do
+          Multimap.insert cur k v1
+          Multimap.insert cur k v2
+          Multimap.insert cur k v3
+        let valueSet = Set.fromList [v1, v2, v3]
+        allOfThem <- withMultiCursor txn db $ \cur -> do
+          vals <- Pipes.toListM $ Multimap.lookupValues cur k
+          pure $ valueSet == Set.fromList vals
+        
+        let valuesWithoutV2 = Set.difference valueSet (Set.fromList [v1])
+        Multimap.deleteKV txn db k v1
+        onlyV2 <- withMultiCursor txn db $ \cur -> do
+          vals <- Pipes.toListM $ Multimap.lookupValues cur k
+          pure $ valuesWithoutV2 == Set.fromList vals
+
+        return $ allOfThem && onlyV2
+
+putGetDeleteMultiManyValuesLaw :: [Word] -> [Color] -> Property
+putGetDeleteMultiManyValuesLaw keys' values' = monadicIO $ do
+  ((\(All correct) -> assert correct) =<< ) $ run $ do
+    let keys = List.nub keys'
+    let values = List.nub values'
+    let klen = length keys
+    let vlen = length values 
+    if klen > 2 && klen < 10 && vlen > 2
+      then do
+        withOneMultiDb multiColorSettings $ \env db -> do
+          withTransaction env $ \txn -> do
+            withMultiCursor txn db $ \cur -> do
+              let xs = [ (k, v) | k <- keys, v <- values ]
+              forM_ xs $ \(k,v) -> Multimap.insert cur k v
+
+            let (toDelete, toKeep) = List.splitAt (List.length values `div` 2) values 
+            forM_ keys $ \k -> 
+              forM_ toDelete $ \v -> Multimap.deleteKV txn db k v
+
+            fmap mconcat $ withMultiCursor txn db $ \cur -> do
+              forM keys $ \k -> do
+                vals <- Pipes.toListM $ Multimap.lookupValues cur k
+                pure $ All $ Set.fromList vals == Set.fromList toKeep
+      else 
+        pure $ All True
+
+putGetDeleteMultiLawSeparate :: Word -> Color -> Color -> Color -> Property
+putGetDeleteMultiLawSeparate k v1 v2 v3 = monadicIO $ do
+  (assert =<<) $ run $ 
+    withOneMultiDb multiColorSettings $ \env db -> do
+      withTransaction env $ \txn -> do
+        withMultiCursor txn db $ \cur -> do
+          Multimap.insert cur k v1
+          Multimap.insert cur k v2
+          Multimap.insert cur k v3
+
+      let valueSet = Set.fromList [v1, v2, v3]
+      allOfThem <- withTransaction env $ \txn -> do
+        withMultiCursor txn db $ \cur -> do
+          vals <- Pipes.toListM $ Multimap.lookupValues cur k
+          pure $ valueSet == Set.fromList vals
+        
+      let valuesWithoutV2 = Set.difference valueSet (Set.fromList [v1])
+      withTransaction env $ \txn -> Multimap.deleteKV txn db k v1
+      onlyV2 <- withTransaction env $ \txn ->
+        withMultiCursor txn db $ \cur -> do
+          vals <- Pipes.toListM $ Multimap.lookupValues cur k
+          pure $ valuesWithoutV2 == Set.fromList vals
+
+      return $ allOfThem && onlyV2
+
+putGetDeleteMultiManyValuesLawSeparate :: [Word] -> [Color] -> Property
+putGetDeleteMultiManyValuesLawSeparate keys' values' = monadicIO $ do
+  ((\(All correct) -> assert correct) =<< ) $ run $ do
+    let keys = List.nub keys'
+    let values = List.nub values'
+    let klen = length keys
+    let vlen = length values 
+    if klen > 2 && klen < 10 && vlen > 2
+      then do
+        withOneMultiDb multiColorSettings $ \env db -> do
+          withTransaction env $ \txn -> do
+            withMultiCursor txn db $ \cur -> do
+              let xs = [ (k, v) | k <- keys, v <- values ]
+              forM_ xs $ \(k,v) -> Multimap.insert cur k v
+
+          let (toDelete, toKeep) = List.splitAt (List.length values `div` 2) values 
+          withTransaction env $ \txn -> do
+            forM_ keys $ \k -> 
+              forM_ toDelete $ \v -> Multimap.deleteKV txn db k v
+          
+          withTransaction env $ \txn -> do
+            fmap mconcat $ withMultiCursor txn db $ \cur -> do          
+              forM keys $ \k -> do
+                vals <- Pipes.toListM $ Multimap.lookupValues cur k
+                pure $ All $ Set.fromList vals == Set.fromList toKeep
+      else 
+        pure $ All True 
         
 
 wordOrdering :: [Word] -> Property
@@ -200,7 +305,7 @@ multimapStreamingValues cursorStart xs = monadicIO $ do
     withOneMultiDb multiColorSettings $ \env db -> do
       withTransaction env $ \txn ->        
         withMultiCursor txn db $ \cur -> do
-          forM_ xs $ \(k,v) -> Multimap.insert cur k v        
+          forM_ xs $ \(k,v) -> Multimap.insert cur k v
           keyVals <- Pipes.toListM $ cursorStart cur          
           let produced = Set.fromList $ map (\(KeyValue k v) -> (k, v)) keyVals
           let expected = Set.fromList xs
@@ -279,7 +384,7 @@ withOneMultiDb s1 f = do
   dirNum <- randomIO :: IO Word64
   let dir = "data/test/" ++ show dirNum
   createDirectory dir
-  env <- initializeReadWriteEnvironment 1000000 5 25 dir
+  env <- initializeReadWriteEnvironment 10000000 120 120 dir
   db1 <- withTransaction env $ \txn -> do
     openMultiDatabase txn (Just "db1") s1
   a <- f env db1
