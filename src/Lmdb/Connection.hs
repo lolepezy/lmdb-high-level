@@ -86,7 +86,10 @@ withROTransaction e@(Environment env) f =
    bool runInBoundThread id True $ bracketOnError
      (mdb_txn_begin env Nothing True)
      mdb_txn_abort
-     $ \txn -> f (Transaction txn)
+     $ \txn -> do 
+       a <- f (Transaction txn)
+       mdb_txn_commit txn
+       return a
 
 
 withNestedTransaction ::
