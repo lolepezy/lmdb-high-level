@@ -78,11 +78,11 @@ withTransaction e@(Environment env) f = do
       mdb_txn_commit txn
       return a
 
-withROTransaction1 :: ModeBool e
+withROTransaction :: ModeBool e
    => Environment e
    -> (Transaction ReadOnly -> IO a)
    -> IO a
-withROTransaction1 e@(Environment env) f =
+withROTransaction e@(Environment env) f =
    bool runInBoundThread id True $ bracketOnError
      (mdb_txn_begin env Nothing True)
      mdb_txn_abort
