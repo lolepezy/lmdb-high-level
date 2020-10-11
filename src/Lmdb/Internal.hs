@@ -135,7 +135,7 @@ insertInternalCursorNeutral flags e k v = do
             )
   -- Consider writing a function to improve performance of
   -- double allocations like this.
-  allocaBytes (fromIntegral keySize) $ \keyPtr -> do
+  allocaBytes (fromIntegral keySize) $ \keyPtr ->
     allocaBytes (fromIntegral valSize) $ \valPtr -> do
       keyPoke keyPtr
       valPoke valPtr
@@ -157,7 +157,7 @@ lookupInternal (Transaction txn) (Database dbi settings) k = do
         mdb_get_X txn dbi (MDB_val (CSize $ fromIntegral keySize) keyPtr)
       case m of
         Nothing -> return Nothing
-        Just (MDB_val valSize valPtr) -> fmap Just $ decodeValue valSize valPtr
+        Just (MDB_val valSize valPtr) -> Just <$> decodeValue valSize valPtr
 
 
 insertInternal :: MDB_WriteFlags -> Transaction 'ReadWrite -> Database k v -> k -> v -> IO Bool

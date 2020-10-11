@@ -176,15 +176,15 @@ putGetDeleteMultiLaw k v1 v2 v3 = monadicIO $ do
         return $ allOfThem && onlyV2
 
 putGetDeleteMultiManyValuesLaw :: [Word] -> [Color] -> Property
-putGetDeleteMultiManyValuesLaw keys' values' = monadicIO $ do
+putGetDeleteMultiManyValuesLaw keys' values' = monadicIO $
   ((\(All correct) -> assert correct) =<< ) $ run $ do
     let keys = List.nub keys'
     let values = List.nub values'
     let klen = length keys
     let vlen = length values 
     if klen > 2 && klen < 10 && vlen > 2
-      then do
-        withOneMultiDb multiColorSettings $ \env db -> do
+      then
+        withOneMultiDb multiColorSettings $ \env db ->
           withTransaction env $ \txn -> do
             withMultiCursor txn db $ \cur -> do
               let xs = [ (k, v) | k <- keys, v <- values ]
@@ -194,7 +194,7 @@ putGetDeleteMultiManyValuesLaw keys' values' = monadicIO $ do
             forM_ keys $ \k -> 
               forM_ toDelete $ \v -> Multimap.deleteKV txn db k v
 
-            fmap mconcat $ withMultiCursor txn db $ \cur -> do
+            fmap mconcat $ withMultiCursor txn db $ \cur ->
               forM keys $ \k -> do
                 vals <- Pipes.toListM $ Multimap.lookupValues cur k
                 pure $ All $ Set.fromList vals == Set.fromList toKeep
@@ -202,17 +202,17 @@ putGetDeleteMultiManyValuesLaw keys' values' = monadicIO $ do
         pure $ All True
 
 putGetDeleteMultiLawSeparate :: Word -> Color -> Color -> Color -> Property
-putGetDeleteMultiLawSeparate k v1 v2 v3 = monadicIO $ do
+putGetDeleteMultiLawSeparate k v1 v2 v3 = monadicIO $ 
   (assert =<<) $ run $ 
     withOneMultiDb multiColorSettings $ \env db -> do
-      withTransaction env $ \txn -> do
+      withTransaction env $ \txn ->
         withMultiCursor txn db $ \cur -> do
           Multimap.insert cur k v1
           Multimap.insert cur k v2
           Multimap.insert cur k v3
 
       let valueSet = Set.fromList [v1, v2, v3]
-      allOfThem <- withTransaction env $ \txn -> do
+      allOfThem <- withTransaction env $ \txn ->
         withMultiCursor txn db $ \cur -> do
           vals <- Pipes.toListM $ Multimap.lookupValues cur k
           pure $ valueSet == Set.fromList vals

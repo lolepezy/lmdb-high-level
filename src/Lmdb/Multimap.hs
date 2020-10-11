@@ -191,7 +191,7 @@ iterT f (FreeT m) = do
         Free y -> f y
 
 hoistFreeT :: (Monad m, Functor f) => (forall a. m a -> n a) -> FreeT f m b -> FreeT f n b
-hoistFreeT mh = FreeT . mh . liftM (fmap (hoistFreeT mh)) . runFreeT
+hoistFreeT mh = FreeT . mh . fmap (fmap (hoistFreeT mh)) . runFreeT
 
 -- deleteBy :: MultiCursor 'ReadWrite k v -> (k -> v -> Bool) -> IO ()
 -- deleteBy (MultiCursor cur dbs) = go where

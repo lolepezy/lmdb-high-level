@@ -6,7 +6,10 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE CPP #-}
 module Lmdb.Types where
+
+
 
 import Database.LMDB.Raw
 import Foreign.C.Types (CSize(..),CInt)
@@ -14,6 +17,7 @@ import Foreign.Ptr (Ptr,FunPtr)
 import Data.Word
 import Data.Primitive.ByteArray (ByteArray)
 import Control.Monad
+import qualified Control.Monad.Fail as Fail
 import qualified Data.Vector.Unboxed as UVector
 import qualified Data.Vector.Primitive as PVector
 
@@ -78,7 +82,9 @@ instance (Functor f, Monad m) => Applicative (FreeT f m) where
   {-# INLINE (<*>) #-}
 
 
-instance (Functor f, Monad m) => Monad (FreeT f m) where
+#if !(MIN_VERSION_base(4,13,0))  
+
+instance (Functor f, Monad m) => Monad (FreeT f m) where    
   fail e = FreeT (fail e)
   return = pure
   {-# INLINE return #-}
@@ -86,12 +92,20 @@ instance (Functor f, Monad m) => Monad (FreeT f m) where
     Pure a -> runFreeT (f a)
     Free w -> return (Free (fmap (>>= f) w))
 
+#else     
 
+instance (Functor f, Monad m) => Monad (FreeT f m) where    
+  return = pure
+  {-# INLINE return #-}
+  FreeT m >>= f = FreeT $ m >>= \v -> case v of
+    Pure a -> runFreeT (f a)
+    Free w -> return (Free (fmap (>>= f) w))
 
--- data KeyValues k v = KeyValues
---   { keyValuesKey :: !k
---   , keyValuesValues
---   }
+instance (Functor f, Fail.MonadFail m) => Fail.MonadFail (FreeT f m) where
+    fail e = FreeT (fail e)
+    
+#endif      
+
 
 data CursorByFfi
   = CursorSafe !MDB_cursor
