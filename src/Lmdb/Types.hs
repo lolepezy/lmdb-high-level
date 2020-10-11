@@ -9,15 +9,15 @@
 {-# LANGUAGE CPP #-}
 module Lmdb.Types where
 
-
-
 import Database.LMDB.Raw
 import Foreign.C.Types (CSize(..),CInt)
 import Foreign.Ptr (Ptr,FunPtr)
 import Data.Word
 import Data.Primitive.ByteArray (ByteArray)
 import Control.Monad
+#if (MIN_VERSION_base(4,13,0))  
 import qualified Control.Monad.Fail as Fail
+#endif
 import qualified Data.Vector.Unboxed as UVector
 import qualified Data.Vector.Primitive as PVector
 
@@ -103,7 +103,7 @@ instance (Functor f, Monad m) => Monad (FreeT f m) where
 
 instance (Functor f, Fail.MonadFail m) => Fail.MonadFail (FreeT f m) where
     fail e = FreeT (fail e)
-    
+
 #endif      
 
 
