@@ -114,6 +114,11 @@ isEncodingDupFixed x = case x of
   EncodingVariable _ -> False
   _ -> True
 
+mapFlags :: Transaction m -> Database k v -> IO [MDB_DbFlag]
+mapFlags tx db = case databaseRef db of 
+    DbiSafe dbi    -> mdb_dbi_flags (getTransaction tx) dbi
+    DbiUnsafe dbi' -> mdb_dbi_flags' (getTransaction tx) dbi'
+
 downgradeSettings :: MultiDatabaseSettings k v -> DatabaseSettings k v
 downgradeSettings (MultiDatabaseSettings a b c d e f) = DatabaseSettings a c d e f
 {-# INLINE downgradeSettings #-}
@@ -220,7 +225,7 @@ getWithKeyGeneral extractResult op (Cursor cur settings) k = do
       extractResult success keyPtr valPtr
 
 getValueWithoutKey :: MDB_cursor_op -> Cursor e k v -> IO (Maybe v)
-getValueWithoutKey op (Cursor cur settings) = do
+getValueWithoutKey op (Cursor cur settings) =
   withKVPtrsNoInit $ \(keyPtr :: Ptr MDB_val) (valPtr :: Ptr MDB_val) -> do
     success <- mdb_cursor_get_X op cur keyPtr valPtr
     decodeOne (getDecoding $ databaseSettingsDecodeValue settings) success valPtr
@@ -249,13 +254,13 @@ decodeResultsMulti settings success keyPtr valPtr = if success
 
 
 getWithoutKey :: MDB_cursor_op -> Cursor e k v -> IO (Maybe (KeyValue k v))
-getWithoutKey op (Cursor cur settings) = do
+getWithoutKey op (Cursor cur settings) =
   withKVPtrsNoInit $ \(keyPtr :: Ptr MDB_val) (valPtr :: Ptr MDB_val) -> do
     success <- mdb_cursor_get_X op cur keyPtr valPtr
     decodeResults settings success keyPtr valPtr
     
 getWithoutKeyMulti :: MDB_cursor_op -> MultiCursor e k v -> IO (Maybe (KeyValue k v))
-getWithoutKeyMulti op (MultiCursor cur settings) = do
+getWithoutKeyMulti op (MultiCursor cur settings) = 
   withKVPtrsNoInit $ \(keyPtr :: Ptr MDB_val) (valPtr :: Ptr MDB_val) -> do
     success <- mdb_cursor_get_X op cur keyPtr valPtr
     decodeResultsMulti settings success keyPtr valPtr
@@ -274,9 +279,8 @@ deleteInternal (Transaction txn) (Database dbi settings) k = do
         keyPoke keyDataPtr
         withKVPtrsInitKey (MDB_val keySize keyDataPtr) $ \keyPtr valPtr -> do
           success <- mdb_cursor_get_X MDB_SET_KEY cur keyPtr valPtr
-          if success 
-            then mdb_cursor_del_X noWriteFlags cur
-            else return ())
+          when success $ mdb_cursor_del_X noWriteFlags cur
+    )
 
 deleteMultiInternal :: Transaction 'ReadWrite -> MultiDatabase k v -> k -> v -> IO ()
 deleteMultiInternal (Transaction txn) (MultiDatabase dbi settings) k v =

@@ -287,5 +287,8 @@ readonly = coerce
 readonlyEnvironment :: Environment 'ReadWrite -> Environment 'ReadOnly
 readonlyEnvironment = coerce
 
-
+isMultiDatabase :: Transaction m -> Database k v -> IO Bool
+isMultiDatabase tx db = do 
+    flags <- mapFlags tx db
+    pure $! MDB_DUPSORT `elem` flags
 
