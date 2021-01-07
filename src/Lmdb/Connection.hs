@@ -17,12 +17,13 @@ import Data.Functor
 import Data.Bits
 import Control.Concurrent (runInBoundThread,isCurrentThreadBound)
 import Data.Bool (bool)
+import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef')
 import System.IO (withFile,IOMode(ReadMode))
 import Foreign.C.Types (CSize(..))
 import Foreign.Ptr (Ptr,plusPtr)
 import Foreign.Marshal.Alloc (allocaBytes,alloca)
 import Control.Monad
-import Control.Exception (finally, bracketOnError, bracket)
+import Control.Exception (finally, bracketOnError, bracket, mask_)
 
 withCursor ::
      Transaction e
@@ -70,25 +71,35 @@ withTransaction ::
   -> IO a
 withTransaction e@(Environment env) f = do
   let isReadOnly = modeIsReadOnly e
+  commited <- newIORef False 
   bool runInBoundThread id isReadOnly $ bracketOnError
     (mdb_txn_begin env Nothing isReadOnly)
-    mdb_txn_abort
+    (\txn -> do 
+        c <- readIORef commited
+        unless c $ mdb_txn_abort txn)
     $ \txn -> do
       a <- f (Transaction txn)
-      mdb_txn_commit txn
+      mask_ $ do 
+           mdb_txn_commit txn
+           modifyIORef' commited $ const True
       return a
 
 withROTransaction :: ModeBool e
    => Environment e
    -> (Transaction ReadOnly -> IO a)
    -> IO a
-withROTransaction e@(Environment env) f =
-   bool runInBoundThread id True $ bracketOnError
+withROTransaction e@(Environment env) f = do 
+   commited <- newIORef False 
+   bracketOnError
      (mdb_txn_begin env Nothing True)
-     mdb_txn_abort
+    (\txn -> do 
+        c <- readIORef commited
+        unless c $ mdb_txn_abort txn)
      $ \txn -> do 
        a <- f (Transaction txn)
-       mdb_txn_commit txn
+       mask_ $ do 
+           mdb_txn_commit txn
+           modifyIORef' commited $ const True
        return a
 
 
