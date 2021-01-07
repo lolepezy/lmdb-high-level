@@ -292,3 +292,7 @@ isMultiDatabase tx db = do
     flags <- mapFlags tx db
     pure $! MDB_DUPSORT `elem` flags
 
+
+copyEnvironment :: Environment 'ReadWrite -> FilePath -> IO ()
+copyEnvironment (Environment env) path = mdb_env_copy env path
+
